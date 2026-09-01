@@ -117,12 +117,27 @@
     return (Date.now() - lastInteractionAt) < 5000;
   }
 
+  // 위 5초 창(recentlyInteracting)만으로는 부족한 경우가 있음 — 예를 들어 사진을 찍으러
+  // 카메라 앱으로 나갔다가 돌아오거나, 한참 생각하다 입력을 이어가는 경우 5초가 넘게
+  // 지나버림. 그래서 "현재 화면에 저장 안 된 입력 내용이 남아있는지" 자체를 검사해서,
+  // 내용이 남아있으면 시간에 상관없이 자동 새로고침으로 화면을 덮어쓰지 않도록 한다.
+  // 각 화면(폼)은 자신이 그려질 때 unsavedCheckers 배열에 자기 상태를 검사하는 함수를
+  // 등록하고, render()가 다시 호출될 때마다 배열은 초기화된다.
+  var unsavedCheckers = [];
+  function hasUnsavedFormContent() {
+    try {
+      return unsavedCheckers.some(function (fn) {
+        try { return !!fn(); } catch (e) { return false; }
+      });
+    } catch (e) { return false; }
+  }
+
   var pollTimer = null;
   function startPolling() {
     if (pollTimer) return;
     pollTimer = setInterval(function () {
       refreshAll().then(function () {
-        if (!recentlyInteracting()) { render(); }
+        if (!recentlyInteracting() && !hasUnsavedFormContent()) { render(); }
       }).catch(function () {});
     }, 6000);
   }
@@ -131,6 +146,7 @@
   var app = document.getElementById('app');
 
   function render() {
+    unsavedCheckers = [];
     app.innerHTML = '';
     if (STATE.view === 'ROLE_SELECT') { app.appendChild(viewRoleSelect()); return; }
     if (STATE.view === 'MANAGER') { app.appendChild(viewManager()); return; }
@@ -248,6 +264,12 @@
     var nameVal = STATE.manager.name;
     var newSiteName = '';
     var showNewSite = false;
+    var siteFilterText = '';
+    var showClosedSites = false;
+
+    unsavedCheckers.push(function () {
+      return !!(nameVal && nameVal.trim()) || !!(showNewSite && newSiteName && newSiteName.trim());
+    });
 
     var wrap = h('div', {}, [
       topbar('현장담당자', '현장과 이름을 선택해주세요', function () { STATE.view = 'ROLE_SELECT'; render(); }),
@@ -265,14 +287,37 @@
       }, []));
 
       container.appendChild(h('label', {}, ['현장 선택']));
+      container.appendChild(h('input', {
+        type: 'text', placeholder: '현장 이름 검색', value: siteFilterText, autocomplete: 'off',
+        oninput: function (e) { siteFilterText = e.target.value; renderSiteChips(); },
+      }, []));
       var siteChips = h('div', { class: 'chip-row' }, []);
-      STATE.sites.forEach(function (s) {
-        siteChips.appendChild(h('div', {
-          class: 'chip' + (STATE.manager.siteId === s.id ? ' active' : ''),
-          onclick: function () { STATE.manager.siteId = s.id; STATE.manager.siteName = s.name; drawBody(); },
-        }, [s.name]));
-      });
       container.appendChild(siteChips);
+
+      function renderSiteChips() {
+        siteChips.innerHTML = '';
+        var q = siteFilterText.trim().toLowerCase();
+        var list = STATE.sites.filter(function (s) {
+          if (!showClosedSites && s.active === false) return false;
+          if (!q) return true;
+          return (s.name || '').toLowerCase().indexOf(q) !== -1;
+        });
+        if (!list.length) {
+          siteChips.appendChild(h('div', { class: 'field-hint' }, [q ? '검색 결과가 없습니다.' : '표시할 현장이 없습니다.']));
+        }
+        list.forEach(function (s) {
+          siteChips.appendChild(h('div', {
+            class: 'chip' + (STATE.manager.siteId === s.id ? ' active' : '') + (s.active === false ? ' inactive' : ''),
+            onclick: function () { STATE.manager.siteId = s.id; STATE.manager.siteName = s.name; drawBody(); },
+          }, [s.name + (s.active === false ? ' (종료됨)' : '')]));
+        });
+      }
+      renderSiteChips();
+
+      container.appendChild(h('button', {
+        class: 'btn btn-secondary btn-sm', style: 'margin-top:8px;',
+        onclick: function () { showClosedSites = !showClosedSites; renderSiteChips(); },
+      }, [showClosedSites ? '종료된 현장 숨기기' : '종료된 현장도 보기']));
 
       if (!STATE.sites.length) {
         container.appendChild(h('div', { class: 'field-hint' }, ['등록된 현장이 없습니다. 아래에서 새로 추가해주세요.']));
@@ -325,10 +370,40 @@
   }
 
   function viewManagerHome() {
-    var draft = { date: todayStr(), vendorId: null, vendorName: '', amount: '', description: '', memo: '', photoUrl: null, photoFile: null, isUrgent: false, urgentReason: '' };
+    var draft = { editingId: null, date: todayStr(), vendorId: null, vendorName: '', amount: '', description: '', memo: '', photoUrls: [], isUrgent: false, urgentReason: '' };
     var showNewVendor = false;
     var newVendor = { name: '', bank: '', account: '', contact: '', bizNo: '', memo: '' };
     var uploading = false;
+
+    function resetDraft() {
+      draft.editingId = null;
+      draft.date = todayStr(); draft.vendorId = null; draft.vendorName = ''; draft.amount = '';
+      draft.description = ''; draft.memo = ''; draft.photoUrls = []; draft.isUrgent = false; draft.urgentReason = '';
+    }
+
+    function startEdit(row) {
+      draft.editingId = row.id;
+      draft.date = row.date;
+      draft.vendorId = row.vendor_id;
+      draft.vendorName = row.vendor_name || '';
+      draft.amount = String(row.amount);
+      draft.description = row.description || '';
+      draft.memo = row.memo || '';
+      draft.photoUrls = Array.isArray(row.photo_urls) && row.photo_urls.length ? row.photo_urls.slice() : (row.photo_url ? [row.photo_url] : []);
+      draft.isUrgent = false;
+      draft.urgentReason = '';
+      toast('수정 모드입니다. 내용을 고친 후 "수정 완료"를 눌러주세요.');
+      drawAll();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    unsavedCheckers.push(function () {
+      return !!(draft.editingId || (draft.vendorName && draft.vendorName.trim()) ||
+        (draft.amount !== '' && draft.amount !== null && String(draft.amount).trim()) ||
+        (draft.description && draft.description.trim()) || (draft.memo && draft.memo.trim()) ||
+        (draft.photoUrls && draft.photoUrls.length) || (draft.urgentReason && draft.urgentReason.trim()) ||
+        (showNewVendor && newVendor.name && newVendor.name.trim()));
+    });
 
     var wrap = h('div', {}, [
       topbar('현장담당자 · ' + STATE.manager.name, STATE.manager.siteName, function () {
@@ -402,26 +477,62 @@
       box.appendChild(h('label', {}, ['메모 (선택)']));
       box.appendChild(h('textarea', { oninput: function (e) { draft.memo = e.target.value; } }, []));
 
-      box.appendChild(h('label', {}, ['증빙 사진/영수증 첨부']));
-      var photoStatus = h('div', { class: 'field-hint' }, [uploading ? '업로드 중...' : (draft.photoUrl ? '사진 첨부됨 ✓' : '첨부된 근거자료(사진)이 없습니다.')]);
+      box.appendChild(h('label', {}, ['증빙 사진/영수증 첨부 (여러 장 가능)']));
+      function photoStatusText() {
+        if (uploading) return '업로드 중...';
+        return draft.photoUrls.length ? (draft.photoUrls.length + '장 첨부됨 ✓') : '첨부된 근거자료(사진)이 없습니다.';
+      }
+      var photoStatus = h('div', { class: 'field-hint' }, [photoStatusText()]);
+      var photoPreview = h('div', { class: 'photo-preview-row' }, []);
+      function renderPhotoPreview() {
+        photoPreview.innerHTML = '';
+        draft.photoUrls.forEach(function (url, idx) {
+          photoPreview.appendChild(h('div', { class: 'photo-thumb' }, [
+            h('img', { src: url, alt: '첨부 사진' }, []),
+            h('button', {
+              type: 'button', class: 'photo-thumb-remove',
+              onclick: function () {
+                draft.photoUrls.splice(idx, 1);
+                photoStatus.textContent = photoStatusText();
+                renderPhotoPreview();
+              },
+            }, ['✕']),
+          ]));
+        });
+      }
+      renderPhotoPreview();
       box.appendChild(h('input', {
-        type: 'file', accept: 'image/*', capture: 'environment',
+        type: 'file', accept: 'image/*', capture: 'environment', multiple: true,
         onchange: function (e) {
-          var f = e.target.files[0];
-          if (!f) return;
+          var files = Array.prototype.slice.call(e.target.files || []);
+          if (!files.length) return;
           uploading = true;
-          photoStatus.textContent = '업로드 중...';
-          uploadPhoto(f).then(function (url) {
-            draft.photoUrl = url;
-            uploading = false;
-            photoStatus.textContent = '사진 첨부됨 ✓';
-          }).catch(function (err) {
-            uploading = false;
-            photoStatus.textContent = '업로드 실패: ' + err.message;
-          });
+          var total = files.length, done = 0;
+          photoStatus.textContent = '업로드 중... (0/' + total + ')';
+          var uploadNext = function (i) {
+            if (i >= files.length) {
+              uploading = false;
+              photoStatus.textContent = photoStatusText();
+              renderPhotoPreview();
+              e.target.value = '';
+              return;
+            }
+            uploadPhoto(files[i]).then(function (url) {
+              draft.photoUrls.push(url);
+              done++;
+              photoStatus.textContent = '업로드 중... (' + done + '/' + total + ')';
+              uploadNext(i + 1);
+            }).catch(function (err) {
+              uploading = false;
+              photoStatus.textContent = '업로드 실패: ' + err.message;
+              renderPhotoPreview();
+            });
+          };
+          uploadNext(0);
         },
       }, []));
       box.appendChild(photoStatus);
+      box.appendChild(photoPreview);
 
       box.appendChild(h('div', { class: 'checkbox-row' }, [
         h('input', { type: 'checkbox', id: 'urgentChk', checked: draft.isUrgent, onchange: function (e) { draft.isUrgent = e.target.checked; drawAll(); } }, []),
@@ -445,6 +556,24 @@
           if (draft.isUrgent && !draft.urgentReason.trim()) { toast('초긴급 사유를 입력해주세요.'); return; }
           if (uploading) { toast('사진 업로드가 끝날 때까지 기다려주세요.'); return; }
 
+          if (draft.editingId) {
+            api('PUT', '/api/requests/' + draft.editingId, {
+              date: draft.date,
+              vendor_id: draft.vendorId,
+              vendor_name: draft.vendorName.trim(),
+              amount: amt,
+              description: draft.description.trim(),
+              memo: draft.memo,
+              photo_urls: draft.photoUrls,
+            }).then(function (updated) {
+              applyUpdatedRequest(updated);
+              toast('지출요청이 수정되었습니다.');
+              resetDraft();
+              drawAll();
+            }).catch(function (err) { toast(err.message); });
+            return;
+          }
+
           api('POST', '/api/requests', {
             site_id: STATE.manager.siteId,
             site_name: STATE.manager.siteName,
@@ -455,18 +584,24 @@
             amount: amt,
             description: draft.description.trim(),
             memo: draft.memo,
-            photo_url: draft.photoUrl,
+            photo_urls: draft.photoUrls,
             is_urgent: draft.isUrgent,
             urgent_reason: draft.urgentReason,
           }).then(function (reqRow) {
             STATE.requests.unshift(reqRow);
             toast(draft.isUrgent ? '초긴급 지출요청이 제출·자동승인되었습니다.' : '지출요청이 제출되었습니다.');
-            draft.date = todayStr(); draft.vendorId = null; draft.vendorName = ''; draft.amount = '';
-            draft.description = ''; draft.memo = ''; draft.photoUrl = null; draft.isUrgent = false; draft.urgentReason = '';
+            resetDraft();
             drawAll();
           }).catch(function (err) { toast(err.message); });
         },
-      }, ['지출요청 제출']));
+      }, [draft.editingId ? '수정 완료' : '지출요청 제출']));
+
+      if (draft.editingId) {
+        box.appendChild(h('button', {
+          class: 'btn btn-secondary', style: 'margin-top:8px;',
+          onclick: function () { resetDraft(); drawAll(); },
+        }, ['수정 취소']));
+      }
 
       return box;
     }
@@ -509,7 +644,15 @@
       if (!mine.length) {
         wrap2.appendChild(h('div', { class: 'empty' }, ['제출한 요청이 없습니다.']));
       } else {
-        mine.forEach(function (r) { wrap2.appendChild(requestCard(r, { showManagerActions: false })); });
+        mine.forEach(function (r) {
+          wrap2.appendChild(requestCard(r, {
+            actions: r.status === 'pending' ? function (row) {
+              return h('div', { class: 'req-actions' }, [
+                h('button', { class: 'btn btn-secondary', onclick: function () { startEdit(row); } }, ['✏️ 수정 (회수)']),
+              ]);
+            } : null,
+          }));
+        });
       }
       return wrap2;
     }
@@ -559,8 +702,13 @@
     if (r.paid_by) {
       card.appendChild(h('div', { class: 'field-hint' }, ['지급: ' + r.paid_by + ' · ' + r.paid_date + (r.paid_memo ? (' · ' + r.paid_memo) : '')]));
     }
-    if (r.photo_url) {
-      card.appendChild(h('img', { class: 'req-photo', src: r.photo_url, alt: '증빙 사진' }, []));
+    var cardPhotoUrls = Array.isArray(r.photo_urls) && r.photo_urls.length ? r.photo_urls : (r.photo_url ? [r.photo_url] : []);
+    if (cardPhotoUrls.length) {
+      var photoRow = h('div', { class: 'req-photo-row' }, []);
+      cardPhotoUrls.forEach(function (url) {
+        photoRow.appendChild(h('img', { class: 'req-photo', src: url, alt: '증빙 사진' }, []));
+      });
+      card.appendChild(photoRow);
     }
     if (opts.actions) {
       card.appendChild(opts.actions(r));
@@ -576,6 +724,11 @@
       h('div', { class: 'container' }, []),
     ]);
     var container = wrap.querySelector('.container');
+    var ceoComments = {};
+
+    unsavedCheckers.push(function () {
+      return Object.keys(ceoComments).some(function (id) { return ceoComments[id] && ceoComments[id].trim(); });
+    });
 
     function draw() {
       container.innerHTML = '';
@@ -609,14 +762,18 @@
           container.appendChild(requestCard(r, {
             actions: function (row) {
               if (row.status !== 'pending') return h('div', {}, []);
-              var commentVal = '';
+              if (ceoComments[row.id] === undefined) ceoComments[row.id] = '';
               var actWrap = h('div', {}, [
-                h('input', { type: 'text', placeholder: '승인/반려 의견 (선택)', oninput: function (e) { commentVal = e.target.value; } }, []),
+                h('input', {
+                  type: 'text', placeholder: '승인/반려 의견 (선택)', value: ceoComments[row.id],
+                  oninput: function (e) { ceoComments[row.id] = e.target.value; },
+                }, []),
                 h('div', { class: 'req-actions' }, [
                   h('button', {
                     class: 'btn btn-success', onclick: function () {
-                      api('POST', '/api/requests/' + row.id + '/decide', { decision: 'approved', comment: commentVal }).then(function (updated) {
+                      api('POST', '/api/requests/' + row.id + '/decide', { decision: 'approved', comment: ceoComments[row.id] }).then(function (updated) {
                         applyUpdatedRequest(updated);
+                        delete ceoComments[row.id];
                         toast('승인 처리되었습니다.');
                         draw();
                       }).catch(function (err) { toast(err.message); });
@@ -624,7 +781,8 @@
                   }, ['승인']),
                   h('button', {
                     class: 'btn btn-danger', onclick: function () {
-                      api('POST', '/api/requests/' + row.id + '/decide', { decision: 'rejected', comment: commentVal }).then(function (updated) {
+                      api('POST', '/api/requests/' + row.id + '/decide', { decision: 'rejected', comment: ceoComments[row.id] }).then(function (updated) {
+                        delete ceoComments[row.id];
                         applyUpdatedRequest(updated);
                         toast('반려 처리되었습니다.');
                         draw();
@@ -654,6 +812,11 @@
       h('div', { class: 'container' }, []),
     ]);
     var container = wrap.querySelector('.container');
+    var accMemos = {};
+
+    unsavedCheckers.push(function () {
+      return Object.keys(accMemos).some(function (id) { return accMemos[id] && accMemos[id].trim(); });
+    });
 
     function draw() {
       container.innerHTML = '';
@@ -686,15 +849,19 @@
               var actWrap = h('div', {}, []);
               if (row.status === 'approved') {
                 var dateVal = todayStr();
-                var memoVal = '';
+                if (accMemos[row.id] === undefined) accMemos[row.id] = '';
                 actWrap.appendChild(h('label', {}, ['지급일']));
                 actWrap.appendChild(h('input', { type: 'date', value: dateVal, oninput: function (e) { dateVal = e.target.value; } }, []));
-                actWrap.appendChild(h('input', { type: 'text', placeholder: '지급 메모 (선택)', oninput: function (e) { memoVal = e.target.value; } }, []));
+                actWrap.appendChild(h('input', {
+                  type: 'text', placeholder: '지급 메모 (선택)', value: accMemos[row.id],
+                  oninput: function (e) { accMemos[row.id] = e.target.value; },
+                }, []));
                 actWrap.appendChild(h('div', { class: 'req-actions' }, [
                   h('button', {
                     class: 'btn btn-success', onclick: function () {
-                      api('POST', '/api/requests/' + row.id + '/pay', { paid_date: dateVal, paid_memo: memoVal }).then(function (updated) {
+                      api('POST', '/api/requests/' + row.id + '/pay', { paid_date: dateVal, paid_memo: accMemos[row.id] }).then(function (updated) {
                         applyUpdatedRequest(updated);
+                        delete accMemos[row.id];
                         toast('지급 처리되었습니다.');
                         draw();
                       }).catch(function (err) { toast(err.message); });
@@ -736,9 +903,31 @@
     var newSiteName = '';
     var newVendor = { name: '', bank: '', account: '', contact: '', bizNo: '' };
 
+    unsavedCheckers.push(function () {
+      return !!(newSiteName && newSiteName.trim()) || !!(newVendor.name && newVendor.name.trim());
+    });
+
+    var siteChipsRow = h('div', { class: 'chip-row' }, STATE.sites.map(function (s) {
+      return h('div', { class: 'chip site-manage-chip' + (s.active === false ? ' inactive' : '') }, [
+        h('span', {}, [s.name + (s.active === false ? ' (종료됨)' : '')]),
+        h('button', {
+          type: 'button', class: 'chip-toggle-btn',
+          onclick: function () {
+            var nextActive = s.active === false;
+            api('PATCH', '/api/sites/' + s.id, { active: nextActive }).then(function (updated) {
+              var idx = STATE.sites.findIndex(function (x) { return x.id === updated.id; });
+              if (idx >= 0) STATE.sites[idx] = updated;
+              toast(nextActive ? '현장을 다시 활성화했습니다.' : '현장을 종료 처리했습니다. (현장담당자 선택 목록에서 제외되며, 기존 요청 내역은 그대로 보존됩니다)');
+              render();
+            }).catch(function (err) { toast(err.message); });
+          },
+        }, [s.active === false ? '재개' : '종료']),
+      ]);
+    }));
+
     var siteCard = h('div', { class: 'card' }, [
       h('label', {}, ['현장 목록 (' + STATE.sites.length + ')']),
-      h('div', { class: 'chip-row' }, STATE.sites.map(function (s) { return h('div', { class: 'chip' }, [s.name]); })),
+      siteChipsRow,
       h('label', {}, ['새 현장 추가']),
       h('input', { type: 'text', placeholder: '현장 이름', oninput: function (e) { newSiteName = e.target.value; } }, []),
       h('button', {
@@ -812,9 +1001,14 @@
     row('지급메모', r.paid_memo);
     area.appendChild(table);
 
-    if (r.photo_url) {
-      area.appendChild(h('div', { class: 'evidence-title' }, ['첨부 증빙자료']));
-      area.appendChild(h('img', { class: 'evidence-photo', src: r.photo_url }, []));
+    var printPhotoUrls = Array.isArray(r.photo_urls) && r.photo_urls.length ? r.photo_urls : (r.photo_url ? [r.photo_url] : []);
+    if (printPhotoUrls.length) {
+      area.appendChild(h('div', { class: 'evidence-title' }, ['첨부 증빙자료 (' + printPhotoUrls.length + '장)']));
+      var evidenceRow = h('div', { class: 'evidence-photo-row' }, []);
+      printPhotoUrls.forEach(function (url) {
+        evidenceRow.appendChild(h('img', { class: 'evidence-photo', src: url }, []));
+      });
+      area.appendChild(evidenceRow);
     } else {
       area.appendChild(h('div', { class: 'evidence-title' }, ['첨부된 근거자료(사진)이 없습니다.']));
     }
