@@ -135,6 +135,10 @@ router.post('/', async function (req, res) {
     const ceo_at = is_urgent ? created_at : 0;
     const ceo_comment = is_urgent ? ('[초긴급 자동승인] ' + urgent_reason) : '';
 
+    // 여러 장의 사진(photo_urls)을 지원. 이전 버전 호환을 위해 photo_url에는 첫 번째 사진을 저장.
+    const photo_urls = Array.isArray(b.photo_urls) ? b.photo_urls.filter(Boolean) : (b.photo_url ? [b.photo_url] : []);
+    const photo_url = photo_urls.length ? photo_urls[0] : (b.photo_url || null);
+
     const row = {
       id,
       site_id,
@@ -146,23 +150,63 @@ router.post('/', async function (req, res) {
       amount,
       description,
       memo: b.memo || '',
-      photo_url: b.photo_url || null,
+      photo_url,
+      photo_urls,
       is_urgent,
       urgent_reason,
       status,
       created_at,
+      updated_at: 0,
       ceo_by,
       ceo_at,
       ceo_comment,
     };
 
     await pool.query(
-      `INSERT INTO requests (id, site_id, site_name, manager_name, date, vendor_id, vendor_name, amount, description, memo, photo_url, is_urgent, urgent_reason, status, created_at, ceo_by, ceo_at, ceo_comment)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-      [row.id, row.site_id, row.site_name, row.manager_name, row.date, row.vendor_id, row.vendor_name, row.amount, row.description, row.memo, row.photo_url, row.is_urgent, row.urgent_reason, row.status, row.created_at, row.ceo_by, row.ceo_at, row.ceo_comment]
+      `INSERT INTO requests (id, site_id, site_name, manager_name, date, vendor_id, vendor_name, amount, description, memo, photo_url, photo_urls, is_urgent, urgent_reason, status, created_at, updated_at, ceo_by, ceo_at, ceo_comment)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+      [row.id, row.site_id, row.site_name, row.manager_name, row.date, row.vendor_id, row.vendor_name, row.amount, row.description, row.memo, row.photo_url, JSON.stringify(row.photo_urls), row.is_urgent, row.urgent_reason, row.status, row.created_at, row.updated_at, row.ceo_by, row.ceo_at, row.ceo_comment]
     );
 
     res.status(201).json(row);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// 현장담당자가 제출한 요청이 아직 대기중(pending)일 때만 수정 가능.
+// (초긴급 건은 제출과 동시에 자동승인되어 pending 상태가 아니므로 이 경로로 들어오지 않음)
+router.put('/:id', async function (req, res) {
+  try {
+    const { rows } = await pool.query('SELECT * FROM requests WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'not_found' });
+    if (rows[0].status !== 'pending') {
+      return res.status(409).json({ error: 'not_editable', message: '대기중인 요청만 수정할 수 있습니다. (이미 처리된 요청은 수정할 수 없어요)' });
+    }
+
+    const b = req.body || {};
+    const date = b.date;
+    const amount = Number(b.amount);
+    const description = (b.description || '').trim();
+    if (!date || !amount || amount <= 0 || !description) {
+      return res.status(400).json({ error: 'invalid_input', message: '필수 항목을 입력해주세요.' });
+    }
+
+    const vendor_id = b.vendor_id || null;
+    const vendor_name = (b.vendor_name || '').trim();
+    const memo = b.memo || '';
+    const photo_urls = Array.isArray(b.photo_urls) ? b.photo_urls.filter(Boolean) : (b.photo_url ? [b.photo_url] : []);
+    const photo_url = photo_urls.length ? photo_urls[0] : null;
+    const updated_at = Date.now();
+
+    await pool.query(
+      `UPDATE requests SET date=$1, vendor_id=$2, vendor_name=$3, amount=$4, description=$5, memo=$6, photo_url=$7, photo_urls=$8, updated_at=$9
+       WHERE id=$10`,
+      [date, vendor_id, vendor_name, amount, description, memo, photo_url, JSON.stringify(photo_urls), updated_at, req.params.id]
+    );
+    const { rows: updated } = await pool.query('SELECT * FROM requests WHERE id = $1', [req.params.id]);
+    res.json(updated[0]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'server_error' });
