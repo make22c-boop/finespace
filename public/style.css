@@ -54,6 +54,14 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .chip { padding: 7px 12px; border-radius: 999px; background: #f3f4f6; border: 1px solid #e5e7eb; font-size: 13px; cursor: pointer; }
 .chip.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.chip.inactive { opacity: 0.55; }
+.chip.inactive:not(.site-manage-chip) { cursor: default; }
+.chip.site-manage-chip { cursor: default; display: inline-flex; align-items: center; gap: 8px; padding-right: 6px; }
+.chip-toggle-btn {
+  border: none; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700;
+  background: #fff; color: #374151; border: 1px solid #d1d5db; cursor: pointer;
+}
+.chip.inactive .chip-toggle-btn { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
 
 .quick-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
 .stat-box { border-radius: 12px; padding: 12px; text-align: center; background: #f9fafb; border: 1px solid #eee; }
@@ -78,9 +86,19 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .badge-rejected { background: #fee2e2; color: #991b1b; }
 .badge-paid { background: #dbeafe; color: #1e40af; }
 .badge-urgent { background: #fecaca; color: #7f1d1d; margin-left: 4px; }
-.req-photo { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-top: 8px; background: #f9fafb; border: 1px solid #eee; }
+.req-photo-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.req-photo { width: calc(50% - 4px); max-height: 200px; object-fit: contain; border-radius: 8px; background: #f9fafb; border: 1px solid #eee; }
 .req-actions { display: flex; gap: 8px; margin-top: 10px; }
 .req-actions .btn { flex: 1; }
+
+.photo-preview-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.photo-thumb { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb; background: #f9fafb; }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-thumb-remove {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%;
+  border: none; background: rgba(17,24,39,0.75); color: #fff; font-size: 12px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;
+}
 
 .empty { text-align: center; color: #9ca3af; font-size: 14px; padding: 40px 10px; }
 
@@ -119,5 +137,6 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .print-table th, .print-table td { border: 1px solid #333; padding: 8px 10px; text-align: left; }
 .print-table th { background: #f3f4f6; width: 130px; }
 .print-doc .evidence-title { margin-top: 24px; font-size: 14px; font-weight: 700; }
-.print-doc .evidence-photo { max-width: 100%; margin-top: 8px; border: 1px solid #ccc; }
+.print-doc .evidence-photo-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.print-doc .evidence-photo { max-width: calc(50% - 5px); border: 1px solid #ccc; }
 .print-doc .sign-row { display: flex; justify-content: flex-end; gap: 40px; margin-top: 40px; font-size: 14px; }
