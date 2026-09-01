@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS sites (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   manager TEXT NOT NULL DEFAULT '',
+  active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at BIGINT NOT NULL
 );
 
@@ -31,10 +32,12 @@ CREATE TABLE IF NOT EXISTS requests (
   description TEXT NOT NULL,
   memo TEXT NOT NULL DEFAULT '',
   photo_url TEXT,
+  photo_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
   is_urgent BOOLEAN NOT NULL DEFAULT FALSE,
   urgent_reason TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected | paid
   created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL DEFAULT 0,
   ceo_by TEXT NOT NULL DEFAULT '',
   ceo_at BIGINT NOT NULL DEFAULT 0,
   ceo_comment TEXT NOT NULL DEFAULT '',
