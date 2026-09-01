@@ -104,11 +104,26 @@
     ]);
   }
 
+  // 사용자가 화면을 조작 중일 때는(입력, 클릭, 체크박스, 폼 토글 등) 자동 새로고침으로
+  // 화면을 통째로 다시 그리지 않음 — 그렇게 하면 입력 중이던 내용/한글 조합/열어둔 폼이
+  // 사라져버림. 최근에 사용자가 뭔가를 조작했다면 잠시 자동 재렌더를 미룬다.
+  var lastInteractionAt = 0;
+  ['input', 'click', 'change', 'keydown', 'focus'].forEach(function (evt) {
+    document.addEventListener(evt, function (e) {
+      if (app.contains(e.target)) { lastInteractionAt = Date.now(); }
+    }, true);
+  });
+  function recentlyInteracting() {
+    return (Date.now() - lastInteractionAt) < 5000;
+  }
+
   var pollTimer = null;
   function startPolling() {
     if (pollTimer) return;
     pollTimer = setInterval(function () {
-      refreshAll().then(render).catch(function () {});
+      refreshAll().then(function () {
+        if (!recentlyInteracting()) { render(); }
+      }).catch(function () {});
     }, 6000);
   }
 
