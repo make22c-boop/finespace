@@ -65,6 +65,20 @@
     var d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
+  // 금액 입력칸: 화면에는 천단위 콤마를 넣어 보여주고, 내부 값(draft.amount)은 숫자만 저장한다.
+  function fmtAmountDisplay(raw) {
+    return raw ? Number(raw).toLocaleString('ko-KR') : '';
+  }
+  function amountInputAttrs(getVal, setVal) {
+    return {
+      type: 'text', inputmode: 'numeric', placeholder: '숫자만 입력', value: fmtAmountDisplay(getVal()),
+      oninput: function (e) {
+        var raw = e.target.value.replace(/[^0-9]/g, '');
+        setVal(raw);
+        e.target.value = fmtAmountDisplay(raw);
+      },
+    };
+  }
   var STATUS_LABEL = { pending: '대기중', approved: '승인됨', rejected: '반려됨', paid: '지급완료', revision_requested: '보완요청' };
   var STATUS_BADGE = { pending: 'badge-pending', approved: 'badge-approved', rejected: 'badge-rejected', paid: 'badge-paid', revision_requested: 'badge-revision' };
 
@@ -508,7 +522,7 @@
         }
 
         box.appendChild(h('label', {}, ['금액']));
-        box.appendChild(h('input', { type: 'number', inputmode: 'numeric', placeholder: '숫자만 입력', value: draft.amount, oninput: function (e) { draft.amount = e.target.value; } }, []));
+        box.appendChild(h('input', amountInputAttrs(function () { return draft.amount; }, function (v) { draft.amount = v; }), []));
 
         box.appendChild(h('label', {}, ['내용']));
         box.appendChild(h('input', { type: 'text', placeholder: '예: 철근 자재 구매', value: draft.description, oninput: function (e) { draft.description = e.target.value; } }, []));
@@ -557,7 +571,7 @@
         box.appendChild(workDateChips);
 
         box.appendChild(h('label', {}, ['급여']));
-        box.appendChild(h('input', { type: 'number', inputmode: 'numeric', placeholder: '숫자만 입력', value: draft.amount, oninput: function (e) { draft.amount = e.target.value; } }, []));
+        box.appendChild(h('input', amountInputAttrs(function () { return draft.amount; }, function (v) { draft.amount = v; }), []));
 
         box.appendChild(h('label', {}, ['비고 (선택)']));
         box.appendChild(h('input', { type: 'text', placeholder: '예: 철거 작업 일용직', value: draft.description, oninput: function (e) { draft.description = e.target.value; } }, []));
