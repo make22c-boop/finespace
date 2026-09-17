@@ -65,8 +65,16 @@
     var d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
-  var STATUS_LABEL = { pending: '대기중', approved: '승인됨', rejected: '반려됨', paid: '지급완료' };
-  var STATUS_BADGE = { pending: 'badge-pending', approved: 'badge-approved', rejected: 'badge-rejected', paid: 'badge-paid' };
+  var STATUS_LABEL = { pending: '대기중', approved: '승인됨', rejected: '반려됨', paid: '지급완료', revision_requested: '보완요청' };
+  var STATUS_BADGE = { pending: 'badge-pending', approved: 'badge-approved', rejected: 'badge-rejected', paid: 'badge-paid', revision_requested: 'badge-revision' };
+
+  // 주민등록번호를 화면에 표시할 때는 뒷자리를 가리고 일부만 보여준다 (인쇄용 지출결의서 제외)
+  function maskIdNo(idNo) {
+    if (!idNo) return '';
+    var digits = String(idNo).replace(/[^0-9]/g, '');
+    if (digits.length < 7) return idNo;
+    return digits.slice(0, 6) + '-' + digits.slice(6, 7) + '******';
+  }
 
   // ---------- state ----------
   var STATE = {
@@ -370,19 +378,26 @@
   }
 
   function viewManagerHome() {
-    var draft = { editingId: null, date: todayStr(), vendorId: null, vendorName: '', amount: '', description: '', memo: '', photoUrls: [], isUrgent: false, urgentReason: '' };
+    var draft = {
+      editingId: null, requestType: 'expense', date: todayStr(), vendorId: null, vendorName: '',
+      amount: '', description: '', memo: '', photoUrls: [], isUrgent: false, urgentReason: '',
+      workerName: '', workerIdNo: '', workerBank: '', workerAccount: '', workDates: [],
+    };
     var showNewVendor = false;
     var newVendor = { name: '', bank: '', account: '', contact: '', bizNo: '', memo: '' };
     var uploading = false;
 
     function resetDraft() {
       draft.editingId = null;
+      draft.requestType = 'expense';
       draft.date = todayStr(); draft.vendorId = null; draft.vendorName = ''; draft.amount = '';
       draft.description = ''; draft.memo = ''; draft.photoUrls = []; draft.isUrgent = false; draft.urgentReason = '';
+      draft.workerName = ''; draft.workerIdNo = ''; draft.workerBank = ''; draft.workerAccount = ''; draft.workDates = [];
     }
 
     function startEdit(row) {
       draft.editingId = row.id;
+      draft.requestType = row.request_type === 'labor' ? 'labor' : 'expense';
       draft.date = row.date;
       draft.vendorId = row.vendor_id;
       draft.vendorName = row.vendor_name || '';
@@ -392,6 +407,11 @@
       draft.photoUrls = Array.isArray(row.photo_urls) && row.photo_urls.length ? row.photo_urls.slice() : (row.photo_url ? [row.photo_url] : []);
       draft.isUrgent = false;
       draft.urgentReason = '';
+      draft.workerName = row.worker_name || '';
+      draft.workerIdNo = row.worker_id_no || '';
+      draft.workerBank = row.worker_bank || '';
+      draft.workerAccount = row.worker_account || '';
+      draft.workDates = Array.isArray(row.work_dates) ? row.work_dates.slice() : [];
       toast('수정 모드입니다. 내용을 고친 후 "수정 완료"를 눌러주세요.');
       drawAll();
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -402,6 +422,8 @@
         (draft.amount !== '' && draft.amount !== null && String(draft.amount).trim()) ||
         (draft.description && draft.description.trim()) || (draft.memo && draft.memo.trim()) ||
         (draft.photoUrls && draft.photoUrls.length) || (draft.urgentReason && draft.urgentReason.trim()) ||
+        (draft.workerName && draft.workerName.trim()) || (draft.workerIdNo && draft.workerIdNo.trim()) ||
+        (draft.workDates && draft.workDates.length) ||
         (showNewVendor && newVendor.name && newVendor.name.trim()));
     });
 
@@ -434,48 +456,115 @@
     function drawForm() {
       var box = h('div', { class: 'card' }, []);
 
+      var typeTabs = h('div', { class: 'tabs form-type-tabs' }, []);
+      [['expense', '지출요청'], ['labor', '노무비 처리']].forEach(function (t) {
+        typeTabs.appendChild(h('div', {
+          class: 'tab' + (draft.requestType === t[0] ? ' active' : '') + (draft.editingId ? ' disabled' : ''),
+          onclick: function () {
+            if (draft.editingId) return; // 수정 중에는 구분(지출요청/노무비)을 바꿀 수 없음
+            draft.requestType = t[0];
+            drawAll();
+          },
+        }, [t[1]]));
+      });
+      box.appendChild(typeTabs);
+      if (draft.editingId) {
+        box.appendChild(h('div', { class: 'field-hint' }, ['수정 중에는 구분을 바꿀 수 없습니다.']));
+      }
+
       box.appendChild(h('label', {}, ['날짜']));
       box.appendChild(h('input', { type: 'date', value: draft.date, oninput: function (e) { draft.date = e.target.value; } }, []));
 
-      box.appendChild(h('label', {}, ['거래처 (직접 입력하거나 아래 목록에서 선택)']));
-      box.appendChild(h('input', {
-        type: 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false',
-        placeholder: '예: 대한철강, OO주유소', value: draft.vendorName,
-        oninput: function (e) { draft.vendorName = e.target.value; draft.vendorId = null; },
-      }, []));
-      if (STATE.vendors.length) {
-        var vchips = h('div', { class: 'chip-row' }, []);
-        STATE.vendors.forEach(function (v) {
-          vchips.appendChild(h('div', {
-            class: 'chip' + (draft.vendorId === v.id ? ' active' : ''),
-            onclick: function () {
-              draft.vendorId = v.id; draft.vendorName = v.name;
-              var input = box.querySelector('input[type=text]');
-              if (input) input.value = v.name;
-              vchips.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('active'); });
-              this.classList.add('active');
+      if (draft.requestType === 'expense') {
+        box.appendChild(h('label', {}, ['거래처 (직접 입력하거나 아래 목록에서 선택)']));
+        box.appendChild(h('input', {
+          type: 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false',
+          placeholder: '예: 대한철강, OO주유소', value: draft.vendorName,
+          oninput: function (e) { draft.vendorName = e.target.value; draft.vendorId = null; },
+        }, []));
+        if (STATE.vendors.length) {
+          var vchips = h('div', { class: 'chip-row' }, []);
+          STATE.vendors.forEach(function (v) {
+            vchips.appendChild(h('div', {
+              class: 'chip' + (draft.vendorId === v.id ? ' active' : ''),
+              onclick: function () {
+                draft.vendorId = v.id; draft.vendorName = v.name;
+                var input = box.querySelector('input[type=text]');
+                if (input) input.value = v.name;
+                vchips.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('active'); });
+                this.classList.add('active');
+              },
+            }, [v.name]));
+          });
+          box.appendChild(vchips);
+        }
+        box.appendChild(h('button', {
+          class: 'btn btn-secondary btn-sm', style: 'margin-top:8px;',
+          onclick: function () { showNewVendor = !showNewVendor; drawAll(); },
+        }, [showNewVendor ? '취소' : '+ 새 거래처 등록']));
+
+        if (showNewVendor) {
+          box.appendChild(vendorRegForm());
+        }
+
+        box.appendChild(h('label', {}, ['금액']));
+        box.appendChild(h('input', { type: 'number', inputmode: 'numeric', placeholder: '숫자만 입력', value: draft.amount, oninput: function (e) { draft.amount = e.target.value; } }, []));
+
+        box.appendChild(h('label', {}, ['내용']));
+        box.appendChild(h('input', { type: 'text', placeholder: '예: 철근 자재 구매', value: draft.description, oninput: function (e) { draft.description = e.target.value; } }, []));
+      } else {
+        box.appendChild(h('label', {}, ['작업자 이름']));
+        box.appendChild(h('input', { type: 'text', placeholder: '작업자 성함', value: draft.workerName, oninput: function (e) { draft.workerName = e.target.value; } }, []));
+
+        box.appendChild(h('label', {}, ['주민등록번호']));
+        box.appendChild(h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 900101-1234567', value: draft.workerIdNo, oninput: function (e) { draft.workerIdNo = e.target.value; } }, []));
+        box.appendChild(h('div', { class: 'field-hint' }, ['세금/4대보험 신고용으로 저장되며, 화면에는 일부만 표시됩니다.']));
+
+        box.appendChild(h('label', {}, ['은행']));
+        box.appendChild(h('input', { type: 'text', placeholder: '예: 국민은행', value: draft.workerBank, oninput: function (e) { draft.workerBank = e.target.value; } }, []));
+
+        box.appendChild(h('label', {}, ['계좌번호']));
+        box.appendChild(h('input', { type: 'text', inputmode: 'numeric', placeholder: '계좌번호', value: draft.workerAccount, oninput: function (e) { draft.workerAccount = e.target.value; } }, []));
+
+        box.appendChild(h('label', {}, ['근로일 (근무한 날짜, 여러 개 선택 가능)']));
+        var workDateInput = h('input', { type: 'date' }, []);
+        var workDateChips = h('div', { class: 'chip-row' }, []);
+        function renderWorkDateChips() {
+          workDateChips.innerHTML = '';
+          draft.workDates.slice().sort().forEach(function (d) {
+            workDateChips.appendChild(h('div', { class: 'chip' }, [
+              d + ' ',
+              h('span', {
+                style: 'font-weight:800;cursor:pointer;', onclick: function () {
+                  draft.workDates = draft.workDates.filter(function (x) { return x !== d; });
+                  renderWorkDateChips();
+                },
+              }, ['✕']),
+            ]));
+          });
+        }
+        renderWorkDateChips();
+        box.appendChild(h('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:8px;' }, [
+          workDateInput,
+          h('button', {
+            type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+              var d = workDateInput.value;
+              if (!d) { toast('달력에서 날짜를 먼저 선택해주세요.'); return; }
+              if (draft.workDates.indexOf(d) === -1) { draft.workDates.push(d); renderWorkDateChips(); }
             },
-          }, [v.name]));
-        });
-        box.appendChild(vchips);
+          }, ['+ 근로일 추가']),
+        ]));
+        box.appendChild(workDateChips);
+
+        box.appendChild(h('label', {}, ['급여']));
+        box.appendChild(h('input', { type: 'number', inputmode: 'numeric', placeholder: '숫자만 입력', value: draft.amount, oninput: function (e) { draft.amount = e.target.value; } }, []));
+
+        box.appendChild(h('label', {}, ['비고 (선택)']));
+        box.appendChild(h('input', { type: 'text', placeholder: '예: 철거 작업 일용직', value: draft.description, oninput: function (e) { draft.description = e.target.value; } }, []));
       }
-      box.appendChild(h('button', {
-        class: 'btn btn-secondary btn-sm', style: 'margin-top:8px;',
-        onclick: function () { showNewVendor = !showNewVendor; drawAll(); },
-      }, [showNewVendor ? '취소' : '+ 새 거래처 등록']));
-
-      if (showNewVendor) {
-        box.appendChild(vendorRegForm());
-      }
-
-      box.appendChild(h('label', {}, ['금액']));
-      box.appendChild(h('input', { type: 'number', inputmode: 'numeric', placeholder: '숫자만 입력', value: draft.amount, oninput: function (e) { draft.amount = e.target.value; } }, []));
-
-      box.appendChild(h('label', {}, ['내용']));
-      box.appendChild(h('input', { type: 'text', placeholder: '예: 철근 자재 구매', value: draft.description, oninput: function (e) { draft.description = e.target.value; } }, []));
 
       box.appendChild(h('label', {}, ['메모 (선택)']));
-      box.appendChild(h('textarea', { oninput: function (e) { draft.memo = e.target.value; } }, []));
+      box.appendChild(h('textarea', { value: draft.memo, oninput: function (e) { draft.memo = e.target.value; } }, []));
 
       box.appendChild(h('label', {}, ['증빙 사진/영수증 첨부 (여러 장 가능)']));
       function photoStatusText() {
@@ -549,52 +638,60 @@
       box.appendChild(h('button', {
         class: 'btn btn-primary', onclick: function () {
           if (!draft.date) { toast('날짜를 입력해주세요.'); return; }
-          if (!draft.vendorName.trim()) { toast('거래처를 입력해주세요.'); return; }
           var amt = Number(draft.amount);
           if (!amt || amt <= 0) { toast('금액을 올바르게 입력해주세요.'); return; }
-          if (!draft.description.trim()) { toast('내용을 입력해주세요.'); return; }
           if (draft.isUrgent && !draft.urgentReason.trim()) { toast('초긴급 사유를 입력해주세요.'); return; }
           if (uploading) { toast('사진 업로드가 끝날 때까지 기다려주세요.'); return; }
 
+          var payload = {
+            date: draft.date,
+            amount: amt,
+            memo: draft.memo,
+            photo_urls: draft.photoUrls,
+          };
+
+          if (draft.requestType === 'labor') {
+            if (!draft.workerName.trim()) { toast('작업자 이름을 입력해주세요.'); return; }
+            if (!draft.workDates.length) { toast('근로일을 하나 이상 추가해주세요.'); return; }
+            payload.worker_name = draft.workerName.trim();
+            payload.worker_id_no = draft.workerIdNo.trim();
+            payload.worker_bank = draft.workerBank.trim();
+            payload.worker_account = draft.workerAccount.trim();
+            payload.work_dates = draft.workDates;
+            payload.description = draft.description.trim();
+          } else {
+            if (!draft.vendorName.trim()) { toast('거래처를 입력해주세요.'); return; }
+            if (!draft.description.trim()) { toast('내용을 입력해주세요.'); return; }
+            payload.vendor_id = draft.vendorId;
+            payload.vendor_name = draft.vendorName.trim();
+            payload.description = draft.description.trim();
+          }
+
           if (draft.editingId) {
-            api('PUT', '/api/requests/' + draft.editingId, {
-              date: draft.date,
-              vendor_id: draft.vendorId,
-              vendor_name: draft.vendorName.trim(),
-              amount: amt,
-              description: draft.description.trim(),
-              memo: draft.memo,
-              photo_urls: draft.photoUrls,
-            }).then(function (updated) {
+            api('PUT', '/api/requests/' + draft.editingId, payload).then(function (updated) {
               applyUpdatedRequest(updated);
-              toast('지출요청이 수정되었습니다.');
+              toast('수정되었습니다.');
               resetDraft();
               drawAll();
             }).catch(function (err) { toast(err.message); });
             return;
           }
 
-          api('POST', '/api/requests', {
-            site_id: STATE.manager.siteId,
-            site_name: STATE.manager.siteName,
-            manager_name: STATE.manager.name,
-            date: draft.date,
-            vendor_id: draft.vendorId,
-            vendor_name: draft.vendorName.trim(),
-            amount: amt,
-            description: draft.description.trim(),
-            memo: draft.memo,
-            photo_urls: draft.photoUrls,
-            is_urgent: draft.isUrgent,
-            urgent_reason: draft.urgentReason,
-          }).then(function (reqRow) {
+          payload.site_id = STATE.manager.siteId;
+          payload.site_name = STATE.manager.siteName;
+          payload.manager_name = STATE.manager.name;
+          payload.request_type = draft.requestType;
+          payload.is_urgent = draft.isUrgent;
+          payload.urgent_reason = draft.urgentReason;
+
+          api('POST', '/api/requests', payload).then(function (reqRow) {
             STATE.requests.unshift(reqRow);
-            toast(draft.isUrgent ? '초긴급 지출요청이 제출·자동승인되었습니다.' : '지출요청이 제출되었습니다.');
+            toast(draft.isUrgent ? '초긴급 요청이 제출·자동승인되었습니다.' : (draft.requestType === 'labor' ? '노무비 처리 요청이 제출되었습니다.' : '지출요청이 제출되었습니다.'));
             resetDraft();
             drawAll();
           }).catch(function (err) { toast(err.message); });
         },
-      }, [draft.editingId ? '수정 완료' : '지출요청 제출']));
+      }, [draft.editingId ? '수정 완료' : (draft.requestType === 'labor' ? '노무비 처리 요청 제출' : '지출요청 제출')]));
 
       if (draft.editingId) {
         box.appendChild(h('button', {
@@ -645,10 +742,13 @@
         wrap2.appendChild(h('div', { class: 'empty' }, ['제출한 요청이 없습니다.']));
       } else {
         mine.forEach(function (r) {
+          var editable = r.status === 'pending' || r.status === 'revision_requested';
           wrap2.appendChild(requestCard(r, {
-            actions: r.status === 'pending' ? function (row) {
+            actions: editable ? function (row) {
               return h('div', { class: 'req-actions' }, [
-                h('button', { class: 'btn btn-secondary', onclick: function () { startEdit(row); } }, ['✏️ 수정 (회수)']),
+                h('button', {
+                  class: 'btn btn-secondary', onclick: function () { startEdit(row); },
+                }, [row.status === 'revision_requested' ? '✏️ 보완 후 재제출' : '✏️ 수정 (회수)']),
               ]);
             } : null,
           }));
@@ -672,21 +772,36 @@
   // ---------- request card (shared) ----------
   function requestCard(r, opts) {
     opts = opts || {};
+    var isLabor = r.request_type === 'labor';
     var card = h('div', { class: 'req-card' }, []);
     var row1 = h('div', { class: 'row1' }, [
       h('div', {}, [
         h('span', { class: 'amount' }, [won(r.amount)]),
         h('span', { class: 'badge ' + (STATUS_BADGE[r.status] || '') }, [STATUS_LABEL[r.status] || r.status]),
+        isLabor ? h('span', { class: 'badge badge-labor' }, ['노무비']) : null,
         r.is_urgent ? h('span', { class: 'badge badge-urgent' }, ['초긴급']) : null,
       ]),
     ]);
     card.appendChild(row1);
     card.appendChild(h('div', { class: 'desc' }, [r.description]));
-    card.appendChild(h('div', { class: 'meta' }, [
-      r.site_name + ' · ' + r.manager_name + ' · ' + r.date,
-      h_br(),
-      '거래처: ' + (r.vendor_name || '-') + (r.memo ? (' · 메모: ' + r.memo) : ''),
-    ]));
+    if (isLabor) {
+      var workDates = Array.isArray(r.work_dates) ? r.work_dates.slice().sort() : [];
+      card.appendChild(h('div', { class: 'meta' }, [
+        r.site_name + ' · ' + r.manager_name + ' · ' + r.date,
+        h_br(),
+        '작업자: ' + (r.worker_name || '-') + (r.worker_id_no ? (' (' + maskIdNo(r.worker_id_no) + ')') : ''),
+        h_br(),
+        (r.worker_bank || r.worker_account) ? ('계좌: ' + (r.worker_bank || '-') + ' ' + (r.worker_account || '')) : '계좌 정보 없음',
+        h_br(),
+        '근로일(' + workDates.length + '일): ' + (workDates.length ? workDates.join(', ') : '-') + (r.memo ? (' · 메모: ' + r.memo) : ''),
+      ]));
+    } else {
+      card.appendChild(h('div', { class: 'meta' }, [
+        r.site_name + ' · ' + r.manager_name + ' · ' + r.date,
+        h_br(),
+        '거래처: ' + (r.vendor_name || '-') + (r.memo ? (' · 메모: ' + r.memo) : ''),
+      ]));
+    }
     if (r.is_urgent && r.urgent_reason) {
       card.appendChild(h('div', { class: 'banner banner-urgent', style: 'margin-top:8px;' }, ['초긴급 사유: ' + r.urgent_reason]));
     }
@@ -696,8 +811,16 @@
     if (r.status === 'approved' && r.ceo_comment && !r.is_urgent) {
       card.appendChild(h('div', { class: 'field-hint' }, ['승인 의견: ' + r.ceo_comment]));
     }
+    if (r.status === 'revision_requested' && r.revision_comment) {
+      card.appendChild(h('div', { class: 'banner banner-revision', style: 'margin-top:8px;' }, [
+        '보완요청 사유 (' + (r.revision_by || '경리') + '): ' + r.revision_comment,
+      ]));
+    }
     if (r.ceo_by) {
       card.appendChild(h('div', { class: 'field-hint' }, [(r.is_urgent ? '자동승인' : '승인/반려') + ': ' + r.ceo_by + ' (' + fmtDate(r.ceo_at) + ')']));
+    }
+    if (r.scheduled_pay_date && r.status !== 'paid') {
+      card.appendChild(h('div', { class: 'field-hint' }, ['지출(지급) 예정일: ' + r.scheduled_pay_date]));
     }
     if (r.paid_by) {
       card.appendChild(h('div', { class: 'field-hint' }, ['지급: ' + r.paid_by + ' · ' + r.paid_date + (r.paid_memo ? (' · ' + r.paid_memo) : '')]));
@@ -706,7 +829,10 @@
     if (cardPhotoUrls.length) {
       var photoRow = h('div', { class: 'req-photo-row' }, []);
       cardPhotoUrls.forEach(function (url) {
-        photoRow.appendChild(h('img', { class: 'req-photo', src: url, alt: '증빙 사진' }, []));
+        photoRow.appendChild(h('img', {
+          class: 'req-photo', src: url, alt: '증빙 사진',
+          onclick: function () { openPhotoLightbox(url); },
+        }, []));
       });
       card.appendChild(photoRow);
     }
@@ -716,6 +842,14 @@
     return card;
   }
   function h_br() { return document.createElement('br'); }
+
+  // ---------- photo lightbox (사진 클릭시 확대) ----------
+  function openPhotoLightbox(url) {
+    var overlay = h('div', { class: 'photo-lightbox', onclick: function () { overlay.remove(); } }, [
+      h('img', { src: url, alt: '확대된 사진' }, []),
+    ]);
+    document.body.appendChild(overlay);
+  }
 
   // ---------- CEO DASHBOARD ----------
   function viewCeoDashboard() {
@@ -813,9 +947,12 @@
     ]);
     var container = wrap.querySelector('.container');
     var accMemos = {};
+    var accScheduleDates = {};
+    var accRevisionComments = {};
 
     unsavedCheckers.push(function () {
-      return Object.keys(accMemos).some(function (id) { return accMemos[id] && accMemos[id].trim(); });
+      return Object.keys(accMemos).some(function (id) { return accMemos[id] && accMemos[id].trim(); }) ||
+        Object.keys(accRevisionComments).some(function (id) { return accRevisionComments[id] && accRevisionComments[id].trim(); });
     });
 
     function draw() {
@@ -823,6 +960,7 @@
       if (STATE.loading) { container.appendChild(h('div', { class: 'empty' }, ['불러오는 중...'])); return; }
 
       var toPay = STATE.requests.filter(function (r) { return r.status === 'approved'; });
+      var revision = STATE.requests.filter(function (r) { return r.status === 'revision_requested'; });
       var paid = STATE.requests.filter(function (r) { return r.status === 'paid'; });
 
       container.appendChild(h('div', { class: 'quick-stats' }, [
@@ -834,12 +972,12 @@
       container.appendChild(exportBox());
 
       var tabs = h('div', { class: 'tabs' }, []);
-      [['toPay', '지급대기'], ['paid', '지급완료']].forEach(function (t) {
+      [['toPay', '지급대기'], ['revision', '보완요청중 (' + revision.length + ')'], ['paid', '지급완료']].forEach(function (t) {
         tabs.appendChild(h('div', { class: 'tab' + (STATE.accTab === t[0] ? ' active' : ''), onclick: function () { STATE.accTab = t[0]; draw(); } }, [t[1]]));
       });
       container.appendChild(tabs);
 
-      var list = STATE.accTab === 'toPay' ? toPay : paid;
+      var list = STATE.accTab === 'toPay' ? toPay : (STATE.accTab === 'revision' ? revision : paid);
       if (!list.length) {
         container.appendChild(h('div', { class: 'empty' }, ['표시할 요청이 없습니다.']));
       } else {
@@ -850,6 +988,26 @@
               if (row.status === 'approved') {
                 var dateVal = todayStr();
                 if (accMemos[row.id] === undefined) accMemos[row.id] = '';
+                if (accScheduleDates[row.id] === undefined) accScheduleDates[row.id] = row.scheduled_pay_date || '';
+                if (accRevisionComments[row.id] === undefined) accRevisionComments[row.id] = '';
+
+                actWrap.appendChild(h('label', {}, ['지출(지급) 예정일 지정']));
+                actWrap.appendChild(h('div', { style: 'display:flex;gap:8px;' }, [
+                  h('input', {
+                    type: 'date', value: accScheduleDates[row.id],
+                    oninput: function (e) { accScheduleDates[row.id] = e.target.value; },
+                  }, []),
+                  h('button', {
+                    class: 'btn btn-secondary btn-sm', onclick: function () {
+                      api('POST', '/api/requests/' + row.id + '/schedule-pay', { scheduled_pay_date: accScheduleDates[row.id] }).then(function (updated) {
+                        applyUpdatedRequest(updated);
+                        toast('지출 예정일이 저장되었습니다.');
+                        draw();
+                      }).catch(function (err) { toast(err.message); });
+                    },
+                  }, ['저장']),
+                ]));
+
                 actWrap.appendChild(h('label', {}, ['지급일']));
                 actWrap.appendChild(h('input', { type: 'date', value: dateVal, oninput: function (e) { dateVal = e.target.value; } }, []));
                 actWrap.appendChild(h('input', {
@@ -868,6 +1026,29 @@
                     },
                   }, ['지급 완료 처리']),
                 ]));
+
+                actWrap.appendChild(h('label', {}, ['보완요청 사유']));
+                actWrap.appendChild(h('input', {
+                  type: 'text', placeholder: '예: 증빙 사진 재첨부 필요, 금액 확인 필요 등', value: accRevisionComments[row.id],
+                  oninput: function (e) { accRevisionComments[row.id] = e.target.value; },
+                }, []));
+                actWrap.appendChild(h('div', { class: 'req-actions' }, [
+                  h('button', {
+                    class: 'btn btn-danger', onclick: function () {
+                      var comment = (accRevisionComments[row.id] || '').trim();
+                      if (!comment) { toast('보완요청 사유를 입력해주세요.'); return; }
+                      api('POST', '/api/requests/' + row.id + '/request-revision', { comment: comment }).then(function (updated) {
+                        applyUpdatedRequest(updated);
+                        delete accRevisionComments[row.id];
+                        toast('현장담당자에게 보완요청을 전달했습니다.');
+                        draw();
+                      }).catch(function (err) { toast(err.message); });
+                    },
+                  }, ['🔁 보완요청 (현장담당자에게 반려)']),
+                ]));
+              }
+              if (row.status === 'revision_requested') {
+                actWrap.appendChild(h('div', { class: 'field-hint' }, ['현장담당자의 재제출을 기다리는 중입니다. 재제출되면 대표 승인 없이 바로 이 화면(지급대기)으로 돌아옵니다.']));
               }
               actWrap.appendChild(h('div', { class: 'req-actions' }, [
                 h('button', { class: 'btn btn-secondary', onclick: function () { printRequest(row); } }, ['🖨 지출결의서 인쇄']),
@@ -990,13 +1171,23 @@
     row('현장', r.site_name);
     row('담당자', r.manager_name);
     row('요청일', r.date);
-    row('거래처', r.vendor_name);
+    if (r.request_type === 'labor') {
+      var workDates = Array.isArray(r.work_dates) ? r.work_dates.slice().sort() : [];
+      row('작업자', r.worker_name);
+      row('주민등록번호', r.worker_id_no); // 인쇄본은 세무/4대보험 신고 등 실제 업무용이므로 원본 표시
+      row('계좌', (r.worker_bank || '-') + ' ' + (r.worker_account || ''));
+      row('근로일 (' + workDates.length + '일)', workDates.join(', '));
+    } else {
+      row('거래처', r.vendor_name);
+    }
     row('금액', won(r.amount));
     row('내용', r.description);
     row('메모', r.memo);
-    row('구분', r.is_urgent ? ('초긴급 (사유: ' + r.urgent_reason + ')') : '일반');
+    row('구분', (r.is_urgent ? '초긴급 (사유: ' + r.urgent_reason + ')' : '일반') + (r.request_type === 'labor' ? ' · 노무비' : ' · 지출요청'));
     row('승인', (r.ceo_by || '-') + (r.ceo_at ? (' / ' + fmtDate(r.ceo_at)) : ''));
     row('승인의견', r.ceo_comment);
+    if (r.revision_comment) row('보완요청 이력', r.revision_comment);
+    row('지출(지급) 예정일', r.scheduled_pay_date);
     row('지급', (r.paid_by || '-') + (r.paid_date ? (' / ' + r.paid_date) : ''));
     row('지급메모', r.paid_memo);
     area.appendChild(table);
