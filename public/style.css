@@ -71,9 +71,11 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .stat-box.approved .num { color: #15803d; }
 .stat-box.urgent .num { color: #b91c1c; }
 
-.tabs { display: flex; gap: 6px; margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; }
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; flex-wrap: wrap; }
 .tab { padding: 10px 4px; font-size: 14px; font-weight: 600; color: #9ca3af; cursor: pointer; border-bottom: 2px solid transparent; margin-right: 14px; }
 .tab.active { color: #111827; border-color: #2563eb; }
+.form-type-tabs { margin-bottom: 4px; }
+.form-type-tabs .tab.disabled { opacity: 0.4; cursor: default; }
 
 .req-card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
 .req-card .row1 { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
@@ -86,8 +88,10 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .badge-rejected { background: #fee2e2; color: #991b1b; }
 .badge-paid { background: #dbeafe; color: #1e40af; }
 .badge-urgent { background: #fecaca; color: #7f1d1d; margin-left: 4px; }
+.badge-revision { background: #fde68a; color: #92400e; }
+.badge-labor { background: #e0e7ff; color: #3730a3; margin-left: 4px; }
 .req-photo-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.req-photo { width: calc(50% - 4px); max-height: 200px; object-fit: contain; border-radius: 8px; background: #f9fafb; border: 1px solid #eee; }
+.req-photo { width: calc(50% - 4px); max-height: 200px; object-fit: contain; border-radius: 8px; background: #f9fafb; border: 1px solid #eee; cursor: zoom-in; }
 .req-actions { display: flex; gap: 8px; margin-top: 10px; }
 .req-actions .btn { flex: 1; }
 
@@ -106,6 +110,13 @@ input[type=file] { font-size: 14px; margin-top: 4px; }
 .banner-ro { background: #fee2e2; color: #991b1b; }
 .banner-info { background: #eff6ff; color: #1e40af; }
 .banner-urgent { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; }
+.banner-revision { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+
+.photo-lightbox {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000;
+  display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out;
+}
+.photo-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
 
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
